@@ -1,0 +1,106 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  USER
+  ADMIN
+}
+
+enum HackathonStatus {
+  UPCOMING
+  LIVE
+  ENDED
+}
+
+model User {
+  id           String   @id @default(cuid())
+  name         String
+  email        String   @unique
+  passwordHash String
+  role         Role     @default(USER)
+  college      String?
+  createdAt    DateTime @default(now())
+
+  registrations Registration[]
+}
+
+model Hackathon {
+  id                  String          @id @default(cuid())
+  title               String
+  description         String
+  rules               String
+  startAt             DateTime
+  endAt               DateTime
+  status              HackathonStatus @default(UPCOMING)
+  totalSlots          Int             @default(100)
+  maxRealParticipants Int             @default(5)
+  resultsPublished    Boolean         @default(false)
+  createdAt           DateTime        @default(now())
+  updatedAt           DateTime        @updatedAt
+
+  registrations    Registration[]
+  leaderboard      LeaderboardEntry[]
+  announcements    Announcement[]
+}
+
+model Registration {
+  id          String   @id @default(cuid())
+  userId      String
+  hackathonId String
+  createdAt   DateTime @default(now())
+
+  user       User      @relation(fields: [userId], references: [id])
+  hackathon  Hackathon @relation(fields: [hackathonId], references: [id])
+  submission Submission?
+  leaderboardEntries LeaderboardEntry[]
+
+  @@unique([userId, hackathonId])
+}
+
+model Submission {
+  id             String   @id @default(cuid())
+  registrationId String   @unique
+  title          String
+  description    String
+  repoUrl        String?
+  zipPath        String
+  zipSize        Int
+  submittedAt    DateTime @default(now())
+  score          Float?
+  adminFeedback  String?
+
+  registration Registration @relation(fields: [registrationId], references: [id])
+}
+
+model LeaderboardEntry {
+  id             String  @id @default(cuid())
+  hackathonId    String
+  rank           Int
+  registrationId String?
+  displayName    String
+  score          Float
+
+  hackathon    Hackathon     @relation(fields: [hackathonId], references: [id])
+  registration Registration? @relation(fields: [registrationId], references: [id])
+
+  @@unique([hackathonId, rank])
+}
+
+model Announcement {
+  id          String    @id @default(cuid())
+  hackathonId String?
+  title       String
+  body        String
+  createdAt   DateTime  @default(now())
+
+  hackathon Hackathon? @relation(fields: [hackathonId], references: [id])
+}
