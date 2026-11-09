@@ -15,7 +15,7 @@ export default async function HomePage() {
     <div className="min-h-screen flex flex-col">
       <Navbar user={session ? { name: session.name, email: session.email, role: session.role } : null} />
       <main className="flex-1">
-        <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-14 pb-20 sm:pt-20 sm:pb-28">
+        <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-8 pb-20 sm:pt-12 sm:pb-28">
           <div className="grid items-center gap-14 lg:grid-cols-[1.05fr_0.95fr] lg:gap-12">
           <div className="max-w-2xl">
             <p className="text-amber-400 text-xs font-semibold uppercase tracking-[0.22em] mb-7">ADAM · Hackathon Platform</p>
