@@ -44,3 +44,19 @@ next-env.d.ts
 /uploads
 /prisma/*.db
 /prisma/*.db-journal
+# Environment variables
+.env
+.env.local
+.env.*
+!.env.example
+
+# Dependencies
+node_modules/
+
+# Next.js
+.next/
+
+# Local database
+dev.db
+dev.db-journal
+
