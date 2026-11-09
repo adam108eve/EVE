@@ -1,5 +1,5 @@
 import { getSession } from "@/lib/auth";
-import { prisma } from "@/lib/prisma";
+import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import Navbar from "@/components/Navbar";
 import Link from "next/link";
 import { redirect } from "next/navigation";
@@ -8,14 +8,18 @@ export default async function AdminDashboard() {
   const session = await getSession();
   if (!session || session.role !== "ADMIN") redirect("/login");
 
-  const [hackathons, announcements, userCount] = await Promise.all([
-    prisma.hackathon.findMany({
-      orderBy: { createdAt: "desc" },
-      include: { _count: { select: { registrations: true } } },
-    }),
-    prisma.announcement.findMany({ orderBy: { createdAt: "desc" }, take: 5 }),
-    prisma.user.count({ where: { role: "USER" } }),
+  const supabase = supabaseAdmin();
+  const [{ data: hackathonRows }, { data: announcements }, { count: userCount }, { data: registrationCounts }] = await Promise.all([
+    supabase.from("hackathons").select("*").order("createdAt", { ascending: false }),
+    supabase.from("announcements").select("*").order("createdAt", { ascending: false }).limit(5),
+    supabase.from("users").select("id", { count: "exact", head: true }).eq("role", "USER"),
+    supabase.rpc("get_hackathon_registration_counts"),
   ]);
+  const registrationCountById = new Map((registrationCounts ?? []).map((row) => [row.hackathonId, row.registrationCount]));
+  const hackathons = (hackathonRows ?? []).map((hackathon) => ({
+    ...hackathon,
+    _count: { registrations: registrationCountById.get(hackathon.id) ?? 0 },
+  }));
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -94,11 +98,11 @@ export default async function AdminDashboard() {
             <h2 className="text-white font-semibold">Recent Announcements</h2>
             <Link href="/admin/announcements/new" className="text-amber-400 hover:text-amber-300 text-sm">+ Post</Link>
           </div>
-          {announcements.length === 0 ? (
+          {(announcements ?? []).length === 0 ? (
             <div className="px-6 py-8 text-center text-gray-500">No announcements yet.</div>
           ) : (
             <div className="divide-y divide-gray-800">
-              {announcements.map((ann) => (
+              {(announcements ?? []).map((ann) => (
                 <div key={ann.id} className="px-6 py-4">
                   <p className="text-white font-medium text-sm">{ann.title}</p>
                   <p className="text-gray-500 text-xs mt-0.5">{new Date(ann.createdAt).toLocaleDateString()}</p>

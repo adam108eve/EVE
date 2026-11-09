@@ -1,5 +1,5 @@
 import { getSession } from "@/lib/auth";
-import { prisma } from "@/lib/prisma";
+import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import Navbar from "@/components/Navbar";
 import Link from "next/link";
 import { notFound } from "next/navigation";
@@ -11,26 +11,27 @@ export default async function HackathonDetailPage({ params }: Props) {
   const { id } = await params;
   const session = await getSession();
 
-  const hackathon = await prisma.hackathon.findUnique({
-    where: { id },
-    include: {
-      announcements: { orderBy: { createdAt: "desc" } },
-      _count: { select: { registrations: true } },
-    },
-  });
+  const supabase = supabaseAdmin();
+  const [{ data: hackathon }, { data: announcements }, { count }] = await Promise.all([
+    supabase.from("hackathons").select("*").eq("id", id).maybeSingle(),
+    supabase.from("announcements").select("*").eq("hackathonId", id).order("createdAt", { ascending: false }),
+    supabase.from("registrations").select("id", { count: "exact", head: true }).eq("hackathonId", id),
+  ]);
 
   if (!hackathon) notFound();
 
   // Check if user is registered
-  let registration = null;
+  let registration: { id: string; submission: { id: string } | null } | null = null;
   if (session) {
-    registration = await prisma.registration.findUnique({
-      where: { userId_hackathonId: { userId: session.sub, hackathonId: id } },
-      include: { submission: true },
-    });
+    const { data } = await supabase.from("registrations").select("id").eq("userId", session.sub).eq("hackathonId", id).maybeSingle();
+    if (data) {
+      const { data: submission } = await supabase.from("submissions").select("id").eq("registrationId", data.id).maybeSingle();
+      registration = { id: data.id, submission };
+    }
   }
 
-  const isFull = hackathon._count.registrations >= hackathon.maxRealParticipants;
+  const registrationCount = count ?? 0;
+  const isFull = registrationCount >= hackathon.maxRealParticipants;
   const user = session ? { name: session.name, email: session.email, role: session.role } : null;
 
   return (
@@ -66,7 +67,7 @@ export default async function HackathonDetailPage({ params }: Props) {
 
             <div className="flex flex-col items-end gap-2">
               <span className="text-gray-400 text-sm">
-                {hackathon._count.registrations} / {hackathon.maxRealParticipants} participants
+                {registrationCount} / {hackathon.maxRealParticipants} participants
               </span>
 
               {registration ? (
@@ -121,11 +122,11 @@ export default async function HackathonDetailPage({ params }: Props) {
         </div>
 
         {/* Announcements */}
-        {hackathon.announcements.length > 0 && (
+          {(announcements ?? []).length > 0 && (
           <div>
             <h2 className="text-white font-semibold text-lg mb-4">Announcements</h2>
             <div className="space-y-3">
-              {hackathon.announcements.map((ann) => (
+                {(announcements ?? []).map((ann) => (
                 <div key={ann.id} className="bg-gray-900 border border-gray-800 rounded-xl p-5">
                   <div className="flex items-start justify-between mb-2">
                     <h3 className="text-white font-medium">{ann.title}</h3>

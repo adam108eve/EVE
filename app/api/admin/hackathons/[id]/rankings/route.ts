@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionFromRequest } from "@/lib/auth";
-import { prisma } from "@/lib/prisma";
+import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { rankAssignmentSchema } from "@/lib/validations";
 
 type Params = { params: Promise<{ id: string }> };
@@ -21,7 +21,10 @@ export async function PUT(req: NextRequest, { params }: Params) {
       return NextResponse.json({ error: parsed.error.flatten().fieldErrors }, { status: 400 });
     }
 
-    const hackathon = await prisma.hackathon.findUnique({ where: { id: hackathonId } });
+    const supabase = supabaseAdmin();
+    const { data: hackathon, error: hackathonError } = await supabase.from("hackathons").select("totalSlots")
+      .eq("id", hackathonId).maybeSingle();
+    if (hackathonError) throw hackathonError;
     if (!hackathon) return NextResponse.json({ error: "Not found." }, { status: 404 });
 
     const { assignments } = parsed.data;
@@ -30,11 +33,18 @@ export async function PUT(req: NextRequest, { params }: Params) {
     if (new Set(registrationIds).size !== registrationIds.length) {
       return NextResponse.json({ error: "A participant can only be assigned once." }, { status: 400 });
     }
-    const matchingRegistrations = await prisma.registration.count({
-      where: { id: { in: registrationIds }, hackathonId },
-    });
-    if (matchingRegistrations !== registrationIds.length) {
+    const { data: matchingRegistrations, error: matchingError } = registrationIds.length > 0
+      ? await supabase.from("registrations").select("id").in("id", registrationIds).eq("hackathonId", hackathonId)
+      : { data: [], error: null };
+    if (matchingError) throw matchingError;
+    if ((matchingRegistrations?.length ?? 0) !== registrationIds.length) {
       return NextResponse.json({ error: "One or more participants are not registered for this hackathon." }, { status: 400 });
+    }
+    const { count: registeredCount, error: registeredError } = await supabase.from("registrations")
+      .select("id", { count: "exact", head: true }).eq("hackathonId", hackathonId);
+    if (registeredError) throw registeredError;
+    if (registrationIds.length !== (registeredCount ?? 0)) {
+      return NextResponse.json({ error: "Assign a rank to every registered participant." }, { status: 400 });
     }
 
     // Validate uniqueness
@@ -52,35 +62,13 @@ export async function PUT(req: NextRequest, { params }: Params) {
       );
     }
 
-    // Upsert real leaderboard entries
-    // Remove each participant's previous entry if their rank changed
-    await prisma.leaderboardEntry.deleteMany({
-      where: {
-        hackathonId,
-        registrationId: { in: assignments.map((a) => a.registrationId) },
-        rank: { notIn: ranks },
-      },
+    // Clear current participants and placeholders at assigned ranks in one
+    // transaction so swaps and edits cannot collide with the unique rank key.
+    const { error: saveError } = await supabase.rpc("save_rank_assignments", {
+      p_hackathon_id: hackathonId,
+      p_assignments: assignments.map((a) => ({ ...a, displayName: a.displayName.trim() })),
     });
-
-    await prisma.$transaction(
-      assignments.map((a) =>
-        prisma.leaderboardEntry.upsert({
-          where: { hackathonId_rank: { hackathonId, rank: a.rank } },
-          create: {
-            hackathonId,
-            rank: a.rank,
-            registrationId: a.registrationId,
-            displayName: a.displayName,
-            score: a.score,
-          },
-          update: {
-            registrationId: a.registrationId,
-            displayName: a.displayName,
-            score: a.score,
-          },
-        })
-      )
-    );
+    if (saveError) throw saveError;
 
     return NextResponse.json({ success: true });
   } catch (error) {
@@ -97,14 +85,24 @@ export async function GET(req: NextRequest, { params }: Params) {
   }
 
   const { id: hackathonId } = await params;
-  const entries = await prisma.leaderboardEntry.findMany({
-    where: { hackathonId },
-    orderBy: { rank: "asc" },
-    include: {
-      registration: {
-        include: { user: { select: { name: true, email: true } } },
-      },
-    },
-  });
-  return NextResponse.json(entries);
+  const supabase = supabaseAdmin();
+  const { data: entries, error } = await supabase.from("leaderboard_entries").select("*").eq("hackathonId", hackathonId).order("rank");
+  if (error) return NextResponse.json({ error: "Could not load rankings." }, { status: 500 });
+  const registrationIds = (entries ?? []).flatMap((entry) => entry.registrationId ? [entry.registrationId] : []);
+  const { data: registrations } = registrationIds.length
+    ? await supabase.from("registrations").select("id, userId").in("id", registrationIds)
+    : { data: [] };
+  const userIds = [...new Set((registrations ?? []).map((registration) => registration.userId))];
+  const { data: users } = userIds.length
+    ? await supabase.from("users").select("id, name, email").in("id", userIds)
+    : { data: [] };
+  const userById = new Map((users ?? []).map((user) => [user.id, { name: user.name, email: user.email }]));
+  const registrationById = new Map((registrations ?? []).map((registration) => [registration.id, registration]));
+  return NextResponse.json((entries ?? []).map((entry) => ({
+    ...entry,
+    registration: entry.registrationId ? {
+      ...registrationById.get(entry.registrationId),
+      user: userById.get(registrationById.get(entry.registrationId)?.userId ?? "") ?? null,
+    } : null,
+  })));
 }

@@ -1,5 +1,5 @@
 import { getSession } from "@/lib/auth";
-import { prisma } from "@/lib/prisma";
+import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { redirect, notFound } from "next/navigation";
 import HackathonForm from "@/components/HackathonForm";
 import Navbar from "@/components/Navbar";
@@ -11,7 +11,7 @@ export default async function EditHackathonPage({ params }: Props) {
   if (!session || session.role !== "ADMIN") redirect("/login");
 
   const { id } = await params;
-  const hackathon = await prisma.hackathon.findUnique({ where: { id } });
+  const { data: hackathon } = await supabaseAdmin().from("hackathons").select("*").eq("id", id).maybeSingle();
   if (!hackathon) notFound();
 
   return (
@@ -24,8 +24,8 @@ export default async function EditHackathonPage({ params }: Props) {
           title: hackathon.title,
           description: hackathon.description,
           rules: hackathon.rules,
-          startAt: hackathon.startAt.toISOString(),
-          endAt: hackathon.endAt.toISOString(),
+          startAt: hackathon.startAt,
+          endAt: hackathon.endAt,
           status: hackathon.status,
           totalSlots: hackathon.totalSlots,
           maxRealParticipants: hackathon.maxRealParticipants,

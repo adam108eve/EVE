@@ -1,4 +1,4 @@
-import { prisma } from "@/lib/prisma";
+import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { getSession } from "@/lib/auth";
 import Navbar from "@/components/Navbar";
 import { notFound } from "next/navigation";
@@ -9,10 +9,8 @@ export default async function LeaderboardPage({ params }: Props) {
   const { id } = await params;
   const session = await getSession();
 
-  const hackathon = await prisma.hackathon.findUnique({
-    where: { id },
-    select: { title: true, resultsPublished: true },
-  });
+  const supabase = supabaseAdmin();
+  const { data: hackathon } = await supabase.from("hackathons").select("title, resultsPublished").eq("id", id).maybeSingle();
   if (!hackathon) notFound();
 
   const user = session ? { name: session.name, email: session.email, role: session.role } : null;
@@ -31,17 +29,13 @@ export default async function LeaderboardPage({ params }: Props) {
     );
   }
 
-  const entries = await prisma.leaderboardEntry.findMany({
-    where: { hackathonId: id },
-    orderBy: { rank: "asc" },
-  });
+  const { data: entries } = await supabase.from("leaderboard_entries").select("*").eq("hackathonId", id).order("rank");
+  const leaderboardEntries = entries ?? [];
 
   // Find own registrationId
   let ownRegistrationId: string | null = null;
   if (session) {
-    const reg = await prisma.registration.findUnique({
-      where: { userId_hackathonId: { userId: session.sub, hackathonId: id } },
-    });
+    const { data: reg } = await supabase.from("registrations").select("id").eq("userId", session.sub).eq("hackathonId", id).maybeSingle();
     ownRegistrationId = reg?.id ?? null;
   }
 
@@ -53,6 +47,9 @@ export default async function LeaderboardPage({ params }: Props) {
         <div className="mb-8 text-center">
           <h1 className="text-3xl font-bold text-white">{hackathon.title}</h1>
           <p className="text-gray-400 mt-1">Final Leaderboard</p>
+          {leaderboardEntries.some((entry) => entry.isPlaceholder) && (
+            <p className="text-amber-300 text-sm mt-3">Illustrative entries fill unoccupied ranks and are not hackathon participants or judged results.</p>
+          )}
         </div>
 
         <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden">
@@ -63,12 +60,12 @@ export default async function LeaderboardPage({ params }: Props) {
           </div>
 
           <div className="divide-y divide-gray-800/50 max-h-[600px] overflow-y-auto">
-            {entries.length === 0 ? (
+            {leaderboardEntries.length === 0 ? (
               <div className="px-6 py-12 text-center text-gray-500">
                 Leaderboard is empty.
               </div>
             ) : (
-              entries.map((entry) => {
+              leaderboardEntries.map((entry) => {
                 const isOwn = ownRegistrationId && entry.registrationId === ownRegistrationId;
                 return (
                   <div
@@ -89,6 +86,7 @@ export default async function LeaderboardPage({ params }: Props) {
                     </span>
                     <span className={`col-span-7 font-medium ${isOwn ? "text-amber-300" : "text-white"}`}>
                       {entry.displayName}
+                      {entry.isPlaceholder && <span className="ml-2 text-xs text-gray-500 font-normal">(Illustrative entry)</span>}
                       {isOwn && <span className="ml-2 text-xs text-amber-400 font-normal">(You)</span>}
                     </span>
                     <span className={`col-span-3 text-right font-semibold ${isOwn ? "text-amber-300" : "text-gray-300"}`}>
@@ -102,7 +100,7 @@ export default async function LeaderboardPage({ params }: Props) {
         </div>
 
         <p className="text-center text-gray-600 text-xs mt-4">
-          Showing {entries.length} entries
+          Showing {leaderboardEntries.length} entries
         </p>
       </main>
     </div>

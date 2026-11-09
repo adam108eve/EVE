@@ -1,5 +1,5 @@
 import { getSession } from "@/lib/auth";
-import { prisma } from "@/lib/prisma";
+import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import Navbar from "@/components/Navbar";
 import Link from "next/link";
 import { redirect } from "next/navigation";
@@ -8,20 +8,26 @@ export default async function DashboardPage() {
   const session = await getSession();
   if (!session) redirect("/login");
 
-  const user = await prisma.user.findUnique({
-    where: { id: session.sub },
-    include: {
-      registrations: {
-        include: {
-          hackathon: true,
-          submission: true,
-        },
-        orderBy: { createdAt: "desc" },
-      },
-    },
-  });
+  const supabase = supabaseAdmin();
+  const [{ data: user }, { data: registrations }] = await Promise.all([
+    supabase.from("users").select("id, name, email, college, role").eq("id", session.sub).maybeSingle(),
+    supabase.from("registrations").select("*").eq("userId", session.sub).order("createdAt", { ascending: false }),
+  ]);
 
   if (!user) redirect("/login");
+
+  const registrationIds = (registrations ?? []).map((registration) => registration.id);
+  const hackathonIds = [...new Set((registrations ?? []).map((registration) => registration.hackathonId))];
+  const [{ data: hackathons }, { data: submissions }] = await Promise.all([
+    hackathonIds.length ? supabase.from("hackathons").select("*").in("id", hackathonIds) : Promise.resolve({ data: [] }),
+    registrationIds.length ? supabase.from("submissions").select("*").in("registrationId", registrationIds) : Promise.resolve({ data: [] }),
+  ]);
+  const hackathonById = new Map((hackathons ?? []).map((hackathon) => [hackathon.id, hackathon]));
+  const submissionByRegistration = new Map((submissions ?? []).map((submission) => [submission.registrationId, submission]));
+  const userRegistrations = (registrations ?? []).flatMap((registration) => {
+    const hackathon = hackathonById.get(registration.hackathonId);
+    return hackathon ? [{ ...registration, hackathon, submission: submissionByRegistration.get(registration.id) ?? null }] : [];
+  });
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -62,7 +68,7 @@ export default async function DashboardPage() {
             </Link>
           </div>
 
-          {user.registrations.length === 0 ? (
+          {userRegistrations.length === 0 ? (
             <div className="bg-gray-900 border border-gray-800 border-dashed rounded-2xl p-12 text-center">
               <p className="text-gray-500 text-lg">You haven&apos;t registered for any hackathons yet.</p>
               <Link
@@ -74,7 +80,7 @@ export default async function DashboardPage() {
             </div>
           ) : (
             <div className="space-y-4">
-              {user.registrations.map((reg) => (
+              {userRegistrations.map((reg) => (
                 <div key={reg.id} className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
                   <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
                     <div>

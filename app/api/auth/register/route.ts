@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
-import { prisma } from "@/lib/prisma";
+import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { signToken, setSessionCookie } from "@/lib/auth";
 import { registerSchema } from "@/lib/validations";
 
@@ -14,15 +14,22 @@ export async function POST(req: NextRequest) {
 
     const { name, email, password, college } = parsed.data;
 
-    const existing = await prisma.user.findUnique({ where: { email } });
+    const supabase = supabaseAdmin();
+    const { data: existing, error: lookupError } = await supabase.from("users").select("id").eq("email", email).maybeSingle();
+    if (lookupError) throw lookupError;
     if (existing) {
       return NextResponse.json({ error: "Email already registered." }, { status: 409 });
     }
 
     const passwordHash = await bcrypt.hash(password, 12);
-    const user = await prisma.user.create({
-      data: { name, email, passwordHash, college, role: "USER" },
-    });
+    const { data: user, error } = await supabase.from("users")
+      .insert({ name, email, passwordHash, college: college ?? null, role: "USER" })
+      .select("id, name, email, role")
+      .single();
+    if (error) {
+      if (error.code === "23505") return NextResponse.json({ error: "Email already registered." }, { status: 409 });
+      throw error;
+    }
 
     const token = await signToken({ sub: user.id, email: user.email, role: user.role, name: user.name });
     const { name: cookieName, value, options } = setSessionCookie(token);

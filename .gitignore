@@ -60,3 +60,4 @@ node_modules/
 dev.db
 dev.db-journal
 
+/supabase/.temp/

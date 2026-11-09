@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionFromRequest } from "@/lib/auth";
-import { prisma } from "@/lib/prisma";
+import { supabaseAdmin } from "@/lib/supabaseAdmin";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -12,32 +12,16 @@ export async function POST(req: NextRequest, { params }: Params) {
   try {
     const { id: hackathonId } = await params;
 
-    const result = await prisma.$transaction(async (tx) => {
-      // Check hackathon exists and is LIVE or UPCOMING
-      const hackathon = await tx.hackathon.findUnique({ where: { id: hackathonId } });
-      if (!hackathon) throw new Error("NOT_FOUND");
-      if (hackathon.status === "ENDED") throw new Error("ENDED");
-
-      // Check if already registered
-      const existing = await tx.registration.findUnique({
-        where: { userId_hackathonId: { userId: session.sub, hackathonId } },
-      });
-      if (existing) throw new Error("ALREADY_REGISTERED");
-
-      // Count real registrations (hard cap)
-      const count = await tx.registration.count({ where: { hackathonId } });
-      if (count >= hackathon.maxRealParticipants) throw new Error("FULL");
-
-      // Create registration
-      return tx.registration.create({
-        data: { userId: session.sub, hackathonId },
-      });
+    const { data: result, error } = await supabaseAdmin().rpc("register_for_hackathon", {
+      p_user_id: session.sub,
+      p_hackathon_id: hackathonId,
     });
+    if (error) throw new Error(error.message);
 
     return NextResponse.json(result, { status: 201 });
   } catch (error) {
     if (error instanceof Error) {
-      const msg = error.message;
+      const msg = ["NOT_FOUND", "ENDED", "ALREADY_REGISTERED", "FULL"].find((code) => error.message.includes(code)) ?? error.message;
       if (msg === "NOT_FOUND") return NextResponse.json({ error: "Hackathon not found." }, { status: 404 });
       if (msg === "ENDED") return NextResponse.json({ error: "Registrations are closed." }, { status: 400 });
       if (msg === "ALREADY_REGISTERED") return NextResponse.json({ error: "Already registered." }, { status: 409 });
@@ -54,10 +38,13 @@ export async function GET(req: NextRequest, { params }: Params) {
   if (!session) return NextResponse.json({ registered: false });
 
   const { id: hackathonId } = await params;
-  const registration = await prisma.registration.findUnique({
-    where: { userId_hackathonId: { userId: session.sub, hackathonId } },
-    include: { submission: true },
-  });
-
-  return NextResponse.json({ registered: !!registration, registration });
+  const supabase = supabaseAdmin();
+  const { data: registration, error } = await supabase.from("registrations").select("*")
+    .eq("userId", session.sub).eq("hackathonId", hackathonId).maybeSingle();
+  if (error) return NextResponse.json({ error: "Could not load registration." }, { status: 500 });
+  const { data: submission, error: submissionError } = registration
+    ? await supabase.from("submissions").select("*").eq("registrationId", registration.id).maybeSingle()
+    : { data: null, error: null };
+  if (submissionError) return NextResponse.json({ error: "Could not load submission." }, { status: 500 });
+  return NextResponse.json({ registered: !!registration, registration: registration ? { ...registration, submission } : null });
 }

@@ -1,5 +1,5 @@
 import { getSession } from "@/lib/auth";
-import { prisma } from "@/lib/prisma";
+import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import Navbar from "@/components/Navbar";
 import Link from "next/link";
 import { redirect, notFound } from "next/navigation";
@@ -13,15 +13,13 @@ export default async function EvaluatePage({ params }: Props) {
 
   const { id: hackathonId, submissionId } = await params;
 
-  const submission = await prisma.submission.findUnique({
-    where: { id: submissionId },
-    include: {
-      registration: {
-        include: { user: { select: { name: true, email: true } } },
-      },
-    },
-  });
+  const supabase = supabaseAdmin();
+  const { data: submission } = await supabase.from("submissions").select("*").eq("id", submissionId).maybeSingle();
   if (!submission) notFound();
+  const { data: registration } = await supabase.from("registrations").select("userId").eq("id", submission.registrationId).maybeSingle();
+  if (!registration) notFound();
+  const { data: participant } = await supabase.from("users").select("name, email").eq("id", registration.userId).maybeSingle();
+  if (!participant) notFound();
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -35,8 +33,8 @@ export default async function EvaluatePage({ params }: Props) {
 
         <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6 mb-6">
           <p className="text-gray-400 text-sm mb-1">Participant</p>
-          <p className="text-white font-semibold">{submission.registration.user.name}</p>
-          <p className="text-gray-500 text-sm">{submission.registration.user.email}</p>
+          <p className="text-white font-semibold">{participant.name}</p>
+          <p className="text-gray-500 text-sm">{participant.email}</p>
 
           <div className="mt-4 pt-4 border-t border-gray-800">
             <p className="text-white font-semibold text-lg">{submission.title}</p>

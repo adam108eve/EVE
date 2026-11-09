@@ -1,14 +1,20 @@
 import { getSession } from "@/lib/auth";
-import { prisma } from "@/lib/prisma";
+import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import Navbar from "@/components/Navbar";
 import Link from "next/link";
 
 export default async function HackathonsPage() {
   const session = await getSession();
-  const hackathons = await prisma.hackathon.findMany({
-    orderBy: { startAt: "asc" },
-    include: { _count: { select: { registrations: true } } },
-  });
+  const supabase = supabaseAdmin();
+  const [{ data: rows }, { data: registrationCounts }] = await Promise.all([
+    supabase.from("hackathons").select("*").order("startAt", { ascending: true }),
+    supabase.rpc("get_hackathon_registration_counts"),
+  ]);
+  const counts = new Map((registrationCounts ?? []).map((row) => [row.hackathonId, row.registrationCount]));
+  const hackathons = (rows ?? []).map((hackathon) => ({
+    ...hackathon,
+    _count: { registrations: counts.get(hackathon.id) ?? 0 },
+  }));
 
   const user = session
     ? { name: session.name, email: session.email, role: session.role }

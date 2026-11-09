@@ -1,5 +1,5 @@
 import { getSession } from "@/lib/auth";
-import { prisma } from "@/lib/prisma";
+import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import Navbar from "@/components/Navbar";
 import Link from "next/link";
 import { redirect, notFound } from "next/navigation";
@@ -12,24 +12,22 @@ export default async function RankingsPage({ params }: Props) {
   if (!session || session.role !== "ADMIN") redirect("/login");
 
   const { id: hackathonId } = await params;
-  const hackathon = await prisma.hackathon.findUnique({
-    where: { id: hackathonId },
-    include: {
-      registrations: {
-        include: {
-          user: { select: { name: true, email: true } },
-          submission: { select: { score: true } },
-          leaderboardEntries: true,
-        },
-      },
-    },
-  });
+  const supabase = supabaseAdmin();
+  const [{ data: hackathon }, { data: registrations }, { data: realEntries }] = await Promise.all([
+    supabase.from("hackathons").select("id, totalSlots").eq("id", hackathonId).maybeSingle(),
+    supabase.from("registrations").select("*").eq("hackathonId", hackathonId),
+    supabase.from("leaderboard_entries").select("*").eq("hackathonId", hackathonId).not("registrationId", "is", null).order("rank"),
+  ]);
   if (!hackathon) notFound();
-
-  const realEntries = await prisma.leaderboardEntry.findMany({
-    where: { hackathonId, registrationId: { not: null } },
-    orderBy: { rank: "asc" },
-  });
+  const registrationIds = (registrations ?? []).map((registration) => registration.id);
+  const userIds = [...new Set((registrations ?? []).map((registration) => registration.userId))];
+  const [{ data: users }, { data: submissions }] = await Promise.all([
+    userIds.length ? supabase.from("users").select("id, name, email").in("id", userIds) : Promise.resolve({ data: [] }),
+    registrationIds.length ? supabase.from("submissions").select("registrationId, score").in("registrationId", registrationIds) : Promise.resolve({ data: [] }),
+  ]);
+  const userById = new Map((users ?? []).map((user) => [user.id, user]));
+  const submissionByRegistration = new Map((submissions ?? []).map((submission) => [submission.registrationId, submission]));
+  const entryByRegistration = new Map((realEntries ?? []).map((entry) => [entry.registrationId, entry]));
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -48,15 +46,20 @@ export default async function RankingsPage({ params }: Props) {
         <RankingClient
           hackathonId={hackathonId}
           totalSlots={hackathon.totalSlots}
-          participants={hackathon.registrations.map((reg) => ({
+          participants={(registrations ?? []).map((reg) => {
+            const entry = entryByRegistration.get(reg.id);
+            const user = userById.get(reg.userId);
+            const submission = submissionByRegistration.get(reg.id);
+            return {
             registrationId: reg.id,
-            name: reg.user.name,
-            email: reg.user.email,
-            score: reg.submission?.score ?? null,
-            currentRank: realEntries.find((e) => e.registrationId === reg.id)?.rank ?? null,
-            currentDisplayName: realEntries.find((e) => e.registrationId === reg.id)?.displayName ?? reg.user.name,
-            currentScore: realEntries.find((e) => e.registrationId === reg.id)?.score ?? reg.submission?.score ?? 50,
-          }))}
+            name: user?.name ?? "Unknown user",
+            email: user?.email ?? "",
+            score: submission?.score ?? null,
+            currentRank: entry?.rank ?? null,
+            currentDisplayName: entry?.displayName ?? user?.name ?? "Unknown user",
+            currentScore: entry?.score ?? submission?.score ?? 50,
+          };
+          })}
         />
       </main>
     </div>

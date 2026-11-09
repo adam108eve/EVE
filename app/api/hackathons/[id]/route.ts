@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionFromRequest } from "@/lib/auth";
-import { prisma } from "@/lib/prisma";
+import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { hackathonSchema } from "@/lib/validations";
 
 type Params = { params: Promise<{ id: string }> };
@@ -9,15 +9,17 @@ type Params = { params: Promise<{ id: string }> };
 export async function GET(req: NextRequest, { params }: Params) {
   try {
     const { id } = await params;
-    const hackathon = await prisma.hackathon.findUnique({
-      where: { id },
-      include: {
-        announcements: { orderBy: { createdAt: "desc" } },
-        _count: { select: { registrations: true } },
-      },
-    });
+    const supabase = supabaseAdmin();
+    const [{ data: hackathon, error }, { data: announcements, error: announcementError }, { count, error: countError }] = await Promise.all([
+      supabase.from("hackathons").select("*").eq("id", id).maybeSingle(),
+      supabase.from("announcements").select("*").eq("hackathonId", id).order("createdAt", { ascending: false }),
+      supabase.from("registrations").select("id", { count: "exact", head: true }).eq("hackathonId", id),
+    ]);
+    if (error) throw error;
+    if (announcementError) throw announcementError;
+    if (countError) throw countError;
     if (!hackathon) return NextResponse.json({ error: "Not found." }, { status: 404 });
-    return NextResponse.json(hackathon);
+    return NextResponse.json({ ...hackathon, announcements, _count: { registrations: count ?? 0 } });
   } catch (error) {
     console.error(error);
     return NextResponse.json({ error: "Internal server error." }, { status: 500 });
@@ -37,7 +39,9 @@ export async function PUT(req: NextRequest, { params }: Params) {
     if (!parsed.success) {
       return NextResponse.json({ error: parsed.error.flatten().fieldErrors }, { status: 400 });
     }
-    const hackathon = await prisma.hackathon.update({ where: { id }, data: parsed.data });
+    const { data: hackathon, error } = await supabaseAdmin().from("hackathons").update(parsed.data).eq("id", id).select("*").maybeSingle();
+    if (error) throw error;
+    if (!hackathon) return NextResponse.json({ error: "Not found." }, { status: 404 });
     return NextResponse.json(hackathon);
   } catch (error) {
     console.error(error);

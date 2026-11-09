@@ -1,5 +1,5 @@
 import { getSession } from "@/lib/auth";
-import { prisma } from "@/lib/prisma";
+import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import Navbar from "@/components/Navbar";
 import Link from "next/link";
 import { redirect, notFound } from "next/navigation";
@@ -12,21 +12,26 @@ export default async function AdminHackathonPage({ params }: Props) {
   if (!session || session.role !== "ADMIN") redirect("/login");
 
   const { id } = await params;
-  const hackathon = await prisma.hackathon.findUnique({
-    where: { id },
-    include: {
-      registrations: {
-        include: {
-          user: { select: { id: true, name: true, email: true, college: true } },
-          submission: true,
-        },
-        orderBy: { createdAt: "asc" },
-      },
-      _count: { select: { registrations: true } },
-    },
-  });
+  const supabase = supabaseAdmin();
+  const [{ data: hackathon }, { data: registrations }] = await Promise.all([
+    supabase.from("hackathons").select("*").eq("id", id).maybeSingle(),
+    supabase.from("registrations").select("*").eq("hackathonId", id).order("createdAt"),
+  ]);
 
   if (!hackathon) notFound();
+  const registrationIds = (registrations ?? []).map((registration) => registration.id);
+  const userIds = [...new Set((registrations ?? []).map((registration) => registration.userId))];
+  const [{ data: users }, { data: submissions }] = await Promise.all([
+    userIds.length ? supabase.from("users").select("id, name, email, college").in("id", userIds) : Promise.resolve({ data: [] }),
+    registrationIds.length ? supabase.from("submissions").select("*").in("registrationId", registrationIds) : Promise.resolve({ data: [] }),
+  ]);
+  const userById = new Map((users ?? []).map((user) => [user.id, user]));
+  const submissionByRegistration = new Map((submissions ?? []).map((submission) => [submission.registrationId, submission]));
+  const participantRows = (registrations ?? []).map((registration) => ({
+    ...registration,
+    user: userById.get(registration.userId) ?? { id: registration.userId, name: "Unknown user", email: "", college: null },
+    submission: submissionByRegistration.get(registration.id) ?? null,
+  }));
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -39,7 +44,7 @@ export default async function AdminHackathonPage({ params }: Props) {
             <div>
               <h1 className="text-2xl font-bold text-white">{hackathon.title}</h1>
               <p className="text-gray-400 text-sm mt-1">
-                {hackathon._count.registrations}/{hackathon.maxRealParticipants} participants ·{" "}
+                {participantRows.length}/{hackathon.maxRealParticipants} participants ·{" "}
                 {hackathon.status} ·{" "}
                 {hackathon.resultsPublished ? "Results Published" : "Results Hidden"}
               </p>
@@ -61,11 +66,11 @@ export default async function AdminHackathonPage({ params }: Props) {
             <h2 className="text-white font-semibold">Participants & Submissions</h2>
           </div>
 
-          {hackathon.registrations.length === 0 ? (
+          {participantRows.length === 0 ? (
             <div className="px-6 py-12 text-center text-gray-500">No participants yet.</div>
           ) : (
             <div className="divide-y divide-gray-800">
-              {hackathon.registrations.map((reg) => (
+              {participantRows.map((reg) => (
                 <div key={reg.id} className="px-6 py-5">
                   <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
                     <div>

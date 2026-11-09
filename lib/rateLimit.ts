@@ -1,19 +1,14 @@
-import { Redis } from "@upstash/redis";
+import { createHash } from "node:crypto";
+import { supabaseAdmin } from "@/lib/supabaseAdmin";
 
-interface RateEntry { count: number; resetAt: number }
-const localStore = new Map<string, RateEntry>();
-let redis: Redis | null = null;
-
-function getRedis(): Redis | null {
-  const url = process.env.UPSTASH_REDIS_REST_URL;
-  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
-  if (!url || !token) {
-    if (process.env.NODE_ENV === "production") {
-      throw new Error("Production rate limiting requires UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN.");
-    }
-    return null;
-  }
-  return redis ??= new Redis({ url, token });
+/**
+ * Use only the address header supplied by the deployment's trusted reverse proxy.
+ * x-forwarded-for is intentionally ignored because its leftmost value can be
+ * controlled by a client on misconfigured deployments.
+ */
+export function getTrustedClientIp(headers: Headers): string {
+  const ip = headers.get("x-real-ip")?.trim();
+  return ip && ip.length <= 64 ? ip : "unknown-client";
 }
 
 export async function rateLimit(
@@ -21,24 +16,14 @@ export async function rateLimit(
   limit: number,
   windowMs: number
 ): Promise<{ allowed: boolean; remaining: number }> {
-  const client = getRedis();
-  if (client) {
-    const result: unknown = await client.eval(
-      "local count = redis.call('INCR', KEYS[1]); if count == 1 then redis.call('PEXPIRE', KEYS[1], ARGV[1]); end; return {count}",
-      [`rate:${key}`],
-      [windowMs]
-    );
-    const count = Number(Array.isArray(result) ? result[0] : result);
-    return { allowed: count <= limit, remaining: Math.max(0, limit - count) };
-  }
-
-  const now = Date.now();
-  const entry = localStore.get(key);
-  if (!entry || now > entry.resetAt) {
-    localStore.set(key, { count: 1, resetAt: now + windowMs });
-    return { allowed: true, remaining: limit - 1 };
-  }
-  if (entry.count >= limit) return { allowed: false, remaining: 0 };
-  entry.count += 1;
-  return { allowed: true, remaining: limit - entry.count };
+  const hashedKey = createHash("sha256").update(key).digest("hex");
+  const { data, error } = await supabaseAdmin().rpc("check_rate_limit", {
+    p_key: hashedKey,
+    p_limit: limit,
+    p_window_ms: windowMs,
+  });
+  if (error) throw new Error(`Supabase rate limit failed: ${error.message}`);
+  const result = data?.[0];
+  if (!result) throw new Error("Supabase rate limit returned no result.");
+  return result;
 }

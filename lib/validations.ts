@@ -21,6 +21,9 @@ export const hackathonSchema = z.object({
   status: z.enum(["UPCOMING", "LIVE", "ENDED"]),
   totalSlots: z.number().int().min(1).max(10000).default(100),
   maxRealParticipants: z.number().int().min(1).max(100).default(5),
+}).refine((value) => new Date(value.endAt) >= new Date(value.startAt), {
+  message: "End time must be after start time.",
+  path: ["endAt"],
 });
 
 export const submissionSchema = z.object({

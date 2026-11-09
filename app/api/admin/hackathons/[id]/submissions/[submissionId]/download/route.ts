@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionFromRequest } from "@/lib/auth";
-import { prisma } from "@/lib/prisma";
+import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { getFileBuffer } from "@/lib/storage";
 
 type Params = { params: Promise<{ id: string; submissionId: string }> };
@@ -14,7 +14,8 @@ export async function GET(req: NextRequest, { params }: Params) {
 
   const { submissionId } = await params;
 
-  const submission = await prisma.submission.findUnique({ where: { id: submissionId } });
+  const { data: submission, error } = await supabaseAdmin().from("submissions").select("zipPath").eq("id", submissionId).maybeSingle();
+  if (error) return NextResponse.json({ error: "Could not load submission." }, { status: 500 });
   if (!submission) return NextResponse.json({ error: "Not found." }, { status: 404 });
 
   let buffer: Buffer;

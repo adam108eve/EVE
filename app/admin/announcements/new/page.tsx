@@ -1,5 +1,5 @@
 import { getSession } from "@/lib/auth";
-import { prisma } from "@/lib/prisma";
+import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import Navbar from "@/components/Navbar";
 import { redirect } from "next/navigation";
 import Link from "next/link";
@@ -8,7 +8,7 @@ import AnnouncementForm from "./AnnouncementForm";
 export default async function NewAnnouncementPage() {
   const session = await getSession();
   if (!session || session.role !== "ADMIN") redirect("/login");
-  const hackathons = await prisma.hackathon.findMany({ orderBy: { createdAt: "desc" }, select: { id: true, title: true } });
+  const { data: hackathons } = await supabaseAdmin().from("hackathons").select("id, title").order("createdAt", { ascending: false });
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -17,7 +17,7 @@ export default async function NewAnnouncementPage() {
         <Link href="/admin" className="text-stone-400 hover:text-amber-400 text-sm">← Admin panel</Link>
         <h1 className="text-3xl font-semibold tracking-tight text-white mt-3">Post an announcement</h1>
         <p className="text-stone-400 mt-2 mb-7">Share an update with participants.</p>
-        <AnnouncementForm hackathons={hackathons} />
+        <AnnouncementForm hackathons={hackathons ?? []} />
       </main>
     </div>
   );

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionFromRequest } from "@/lib/auth";
-import { prisma } from "@/lib/prisma";
+import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { z } from "zod";
 
 type Params = { params: Promise<{ id: string }> };
@@ -22,13 +22,23 @@ export async function PUT(req: NextRequest, { params }: Params) {
   const parsed = z.object({ publish: z.boolean() }).safeParse(body);
   if (!parsed.success) return NextResponse.json({ error: "publish must be a boolean." }, { status: 400 });
 
-  const existing = await prisma.hackathon.findUnique({ where: { id: hackathonId }, select: { id: true } });
+  const supabase = supabaseAdmin();
+  const { data: existing, error: existingError } = await supabase.from("hackathons").select("id, totalSlots")
+    .eq("id", hackathonId).maybeSingle();
+  if (existingError) return NextResponse.json({ error: "Could not load hackathon." }, { status: 500 });
   if (!existing) return NextResponse.json({ error: "Hackathon not found." }, { status: 404 });
 
-  const hackathon = await prisma.hackathon.update({
-    where: { id: hackathonId },
-    data: { resultsPublished: parsed.data.publish },
-  });
+  if (parsed.data.publish) {
+    const { data: entries, error: entriesError } = await supabase.from("leaderboard_entries").select("rank").eq("hackathonId", hackathonId);
+    if (entriesError) return NextResponse.json({ error: "Could not load leaderboard." }, { status: 500 });
+    if (entries.length !== existing.totalSlots || new Set(entries.map((entry) => entry.rank)).size !== existing.totalSlots) {
+      return NextResponse.json({ error: "Fill every leaderboard rank before publishing results." }, { status: 400 });
+    }
+  }
+
+  const { data: hackathon, error } = await supabase.from("hackathons").update({ resultsPublished: parsed.data.publish })
+    .eq("id", hackathonId).select("resultsPublished").single();
+  if (error) return NextResponse.json({ error: "Could not update publication status." }, { status: 500 });
 
   return NextResponse.json({ resultsPublished: hackathon.resultsPublished });
 }

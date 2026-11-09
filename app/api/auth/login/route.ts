@@ -1,14 +1,21 @@
 import { NextRequest, NextResponse } from "next/server";
+import { createHash } from "node:crypto";
 import bcrypt from "bcryptjs";
-import { prisma } from "@/lib/prisma";
+import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { signToken, setSessionCookie } from "@/lib/auth";
 import { loginSchema } from "@/lib/validations";
-import { rateLimit } from "@/lib/rateLimit";
+import { getTrustedClientIp, rateLimit } from "@/lib/rateLimit";
 
 export async function POST(req: NextRequest) {
-  const ip = req.headers.get("x-forwarded-for") ?? req.headers.get("x-real-ip") ?? "unknown";
-  const { allowed } = await rateLimit(`login:${ip}`, 5, 60 * 1000);
-  if (!allowed) {
+  const ip = getTrustedClientIp(req.headers);
+  const bodyForRateLimit = await req.clone().json().catch(() => ({}));
+  const email = bodyForRateLimit && typeof bodyForRateLimit === "object" ? (bodyForRateLimit as { email?: unknown }).email : undefined;
+  const accountKey = typeof email === "string"
+    ? createHash("sha256").update(email.trim().toLowerCase()).digest("hex")
+    : "invalid";
+  const { allowed: ipAllowed } = await rateLimit(`login:ip:${ip}`, 10, 60 * 1000);
+  const { allowed: accountAllowed } = await rateLimit(`login:account:${accountKey}`, 5, 60 * 1000);
+  if (!ipAllowed || !accountAllowed) {
     return NextResponse.json({ error: "Too many login attempts. Try again in a minute." }, { status: 429 });
   }
 
@@ -20,7 +27,8 @@ export async function POST(req: NextRequest) {
     }
 
     const { email, password } = parsed.data;
-    const user = await prisma.user.findUnique({ where: { email } });
+    const { data: user, error } = await supabaseAdmin().from("users").select("*").eq("email", email).maybeSingle();
+    if (error) throw error;
     if (!user) {
       return NextResponse.json({ error: "Invalid email or password." }, { status: 401 });
     }
